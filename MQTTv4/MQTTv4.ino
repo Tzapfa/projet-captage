@@ -27,7 +27,7 @@ void loop() {
   // Lecture des données du Moniteur Série
   while (Serial.available()) {
    // char inChar = (char) Serial.read();
-    char inChar = "Helo World";
+    char inChar = (char) Serial.read(); 
     inputString += inChar;
     if (inChar == '\n' || inChar == '\r') {
       loraSerial.print(inputString); // Envoyer au Dragino
