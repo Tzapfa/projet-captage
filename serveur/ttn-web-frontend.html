@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualisation des données TTN</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.3.4/axios.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .chart-container {
+            height: 500px;
+            margin-top: 20px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+        }
+        .refresh-btn {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .refresh-btn:hover {
+            background-color: #45a049;
+        }
+        .stats-panel {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .stat-card {
+            flex: 1;
+            min-width: 120px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+        .stat-label {
+            color: #6c757d;
+            font-size: 14px;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-style: italic;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Données LoRaWAN (TTN)</h1>
+            <div class="controls">
+                <select id="chartType">
+                    <option value="histogram">Histogramme</option>
+                    <option value="line">Ligne temporelle</option>
+                </select>
+                <button id="refreshBtn" class="refresh-btn">Actualiser</button>
+            </div>
+        </div>
+        
+        <div id="statsPanel" class="stats-panel">
+            <div class="stat-card">
+                <div class="stat-label">Nombre de mesures</div>
+                <div id="countStat" class="stat-value">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Minimum</div>
+                <div id="minStat" class="stat-value">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Maximum</div>
+                <div id="maxStat" class="stat-value">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Moyenne</div>
+                <div id="avgStat" class="stat-value">--</div>
+            </div>
+        </div>
+        
+        <div id="loadingMessage" class="loading">Chargement des données...</div>
+        <div class="chart-container">
+            <canvas id="dataChart"></canvas>
+        </div>
+    </div>
+    
+    <script>
+        // Configuration
+        const API_URL = '/api/data';
+        const STATS_URL = '/api/stats';
+        const REFRESH_INTERVAL = 30000; // 30 secondes
+        
+        // Références aux éléments DOM
+        const chartElement = document.getElementById('dataChart');
+        const chartTypeSelect = document.getElementById('chartType');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const loadingMessage = document.getElementById('loadingMessage');
+        const countStat = document.getElementById('countStat');
+        const minStat = document.getElementById('minStat');
+        const maxStat = document.getElementById('maxStat');
+        const avgStat = document.getElementById('avgStat');
+        
+        // Initialisation du graphique
+        let chart = null;
+        
+        // Configuration du proxy pour axios
+        axios.defaults.proxy = {
+            host: '10.129.254.254',
+            port: 3128
+        };
+        
+        // Fonction pour créer l'histogramme
+        function createHistogram(data) {
+            // Extraction des valeurs pour l'histogramme
+            const values = data.map(item => item.value);
+            
+            // Calcul des bins pour l'histogramme
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            const binCount = 10;
+            const binSize = (max - min) / binCount;
+            
+            // Création des bins
+            const bins = Array(binCount).fill(0);
+            const binLabels = [];
+            
+            // Génération des étiquettes de bins
+            for (let i = 0; i < binCount; i++) {
+                const binStart = min + i * binSize;
+                const binEnd = binStart + binSize;
+                binLabels.push(`${binStart.toFixed(1)} - ${binEnd.toFixed(1)}`);
+            }
+            
+            // Comptage des valeurs dans chaque bin
+            values.forEach(value => {
+                if (value >= min && value <= max) {
+                    const binIndex = Math.min(Math.floor((value - min) / binSize), binCount - 1);
+                    bins[binIndex]++;
+                }
+            });
+            
+            return {
+                labels: binLabels,
+                datasets: [{
+                    label: 'Fréquence',
+                    data: bins,
+                    backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                    borderColor: 'rgba(54, 162, 235, 1)',
+                    borderWidth: 1
+                }]
+            };
+        }
+        
+        // Fonction pour créer un graphique linéaire temporel
+        function createLineChart(data) {
+            // Trier les données par timestamp
+            data.sort((a, b) => a.timestamp - b.timestamp);
+            
+            return {
+                labels: data.map(item => new Date(item.timestamp).toLocaleTimeString()),
+                datasets: [{
+                    label: 'Valeur',
+                    data: data.map(item => item.value),
+                    fill: false,
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    tension: 0.1
+                }]
+            };
+        }
+        
+        // Initialiser et mettre à jour le graphique
+        function updateChart(data) {
+            const chartType = chartTypeSelect.value;
+            const chartData = chartType === 'histogram' ? createHistogram(data) : createLineChart(data);
+            
+            const chartConfig = {
+                type: chartType === 'histogram' ? 'bar' : 'line',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: chartType === 'histogram' ? 'Fréquence' : 'Valeur'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: chartType === 'histogram' ? 'Plage de valeurs' : 'Heure'
+                            }
+                        }
+                    }
+                }
+            };
+            
+            // Détruire le graphique existant s'il existe
+            if (chart) {
+                chart.destroy();
+            }
+            
+            // Créer un nouveau graphique
+            chart = new Chart(chartElement, chartConfig);
+        }
+        
+        // Mettre à jour les statistiques
+        function updateStats(stats) {
+            countStat.textContent = stats.count;
+            minStat.textContent = stats.min !== null ? stats.min.toFixed(2) : '--';
+            maxStat.textContent = stats.max !== null ? stats.max.toFixed(2) : '--';
+            avgStat.textContent = stats.avg !== null ? stats.avg.toFixed(2) : '--';
+        }
+        
+        // Fonction pour charger les données
+        async function loadData() {
+            loadingMessage.style.display = 'block';
+            
+            try {
+                // Récupérer les données et les statistiques en parallèle
+                const [dataResponse, statsResponse] = await Promise.all([
+                    axios.get(API_URL),
+                    axios.get(STATS_URL)
+                ]);
+                
+                const data = dataResponse.data;
+                const stats = statsResponse.data;
+                
+                if (data.length > 0) {
+                    updateChart(data);
+                    updateStats(stats);
+                    loadingMessage.style.display = 'none';
+                } else {
+                    loadingMessage.textContent = 'Aucune donnée disponible pour le moment';
+                }
+            } catch (error) {
+                console.error('Erreur lors du chargement des données:', error);
+                loadingMessage.textContent = `Erreur: ${error.message}`;
+            }
+        }
+        
+        // Événements
+        refreshBtn.addEventListener('click', loadData);
+        chartTypeSelect.addEventListener('change', loadData);
+        
+        // Charger les données initiales
+        loadData();
+        
+        // Configurer l'actualisation automatique
+        setInterval(loadData, REFRESH_INTERVAL);
+    </script>
+</body>
+</html>

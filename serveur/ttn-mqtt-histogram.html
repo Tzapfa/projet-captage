@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TTN LoRaWAN Data Histogram</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .chart-container {
+            height: 400px;
+            margin-top: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #1976D2;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #1565C0;
+        }
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .connected {
+            background-color: #E8F5E9;
+            color: #2E7D32;
+        }
+        .disconnected {
+            background-color: #FFEBEE;
+            color: #C62828;
+        }
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .data-table th, .data-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .data-table th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Visualisation des données LoRaWAN: The Things Network</h1>
+        
+        <div class="form-group">
+            <label for="region">Région TTN:</label>
+            <select id="region">
+                <option value="eu1">Europe 1</option>
+                <option value="nam1">North America 1</option>
+                <option value="au1">Australia 1</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="application-id">Application ID:</label>
+            <input type="text" id="application-id" placeholder="Votre Application ID">
+        </div>
+        
+        <div class="form-group">
+            <label for="device-id">Device ID (optionnel, laissez vide pour tous les appareils):</label>
+            <input type="text" id="device-id" placeholder="Votre Device ID (optionnel)">
+        </div>
+        
+        <div class="form-group">
+            <label for="api-key">API Key:</label>
+            <input type="password" id="api-key" placeholder="Votre API Key">
+        </div>
+        
+        <div class="form-group">
+            <label for="data-field">Champ de données à afficher:</label>
+            <input type="text" id="data-field" placeholder="Ex: payload_fields.temperature">
+        </div>
+        
+        <button id="connect-btn">Connecter</button>
+        <button id="disconnect-btn" disabled>Déconnecter</button>
+        
+        <div id="status" class="status disconnected">
+            Status: Déconnecté
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="data-histogram"></canvas>
+        </div>
+        
+        <h2>Dernières données reçues</h2>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Heure</th>
+                    <th>Appareil</th>
+                    <th>Valeur</th>
+                </tr>
+            </thead>
+            <tbody id="data-table-body">
+                <!-- Les données seront insérées ici -->
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        // Variables globales
+        let client = null;
+        let chartInstance = null;
+        let dataValues = [];
+        const maxDataPoints = 50;
+        
+        // Éléments DOM
+        const connectBtn = document.getElementById('connect-btn');
+        const disconnectBtn = document.getElementById('disconnect-btn');
+        const statusDiv = document.getElementById('status');
+        const dataTableBody = document.getElementById('data-table-body');
+        
+        // Initialiser l'histogramme
+        function initializeChart() {
+            const ctx = document.getElementById('data-histogram').getContext('2d');
+            
+            // Détruire le graphique existant s'il y en a un
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+            
+            // Créer un nouveau graphique
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: [], // Les plages de valeurs
+                    datasets: [{
+                        label: document.getElementById('data-field').value,
+                        data: [], // Les fréquences
+                        backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Fréquence'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Valeur'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Mettre à jour l'histogramme avec les nouvelles données
+        function updateHistogram() {
+            if (dataValues.length === 0 || !chartInstance) return;
+            
+            // Calculer les statistiques pour l'histogramme
+            const min = Math.min(...dataValues);
+            const max = Math.max(...dataValues);
+            const range = max - min;
+            
+            // Créer 10 bacs (ou moins si moins de valeurs uniques)
+            const numBuckets = Math.min(10, new Set(dataValues).size);
+            const bucketSize = range / numBuckets;
+            
+            // Initialiser les bacs
+            const buckets = Array(numBuckets).fill(0);
+            const labels = [];
+            
+            // Créer les étiquettes pour chaque bac
+            for (let i = 0; i < numBuckets; i++) {
+                const lowerBound = min + (i * bucketSize);
+                const upperBound = min + ((i + 1) * bucketSize);
+                labels.push(`${lowerBound.toFixed(2)} - ${upperBound.toFixed(2)}`);
+            }
+            
+            // Compter les valeurs dans chaque bac
+            dataValues.forEach(value => {
+                const bucketIndex = Math.min(
+                    Math.floor((value - min) / bucketSize),
+                    numBuckets - 1
+                );
+                buckets[bucketIndex]++;
+            });
+            
+            // Mettre à jour le graphique
+            chartInstance.data.labels = labels;
+            chartInstance.data.datasets[0].data = buckets;
+            chartInstance.update();
+        }
+        
+        // Fonction pour extraire une valeur d'un objet à partir d'un chemin (ex: "payload_fields.temperature")
+        function getNestedValue(obj, path) {
+            return path.split('.').reduce((prev, curr) => {
+                return prev && prev[curr] !== undefined ? prev[curr] : null;
+            }, obj);
+        }
+        
+        // Ajouter une ligne au tableau de données
+        function addDataRow(deviceId, value, timestamp) {
+            const row = document.createElement('tr');
+            const timeCol = document.createElement('td');
+            const deviceCol = document.createElement('td');
+            const valueCol = document.createElement('td');
+            
+            const date = new Date(timestamp);
+            timeCol.textContent = date.toLocaleTimeString();
+            deviceCol.textContent = deviceId;
+            valueCol.textContent = value;
+            
+            row.appendChild(timeCol);
+            row.appendChild(deviceCol);
+            row.appendChild(valueCol);
+            
+            dataTableBody.insertBefore(row, dataTableBody.firstChild);
+            
+            // Limiter le nombre de lignes dans le tableau
+            if (dataTableBody.children.length > maxDataPoints) {
+                dataTableBody.removeChild(dataTableBody.lastChild);
+            }
+        }
+        
+        // Connexion à MQTT
+        function connectToTTN() {
+            const region = document.getElementById('region').value;
+            const applicationId = document.getElementById('application-id').value;
+            const deviceId = document.getElementById('device-id').value;
+            const apiKey = document.getElementById('api-key').value;
+            const dataField = document.getElementById('data-field').value;
+            
+            if (!applicationId || !apiKey || !dataField) {
+                alert('Veuillez remplir tous les champs obligatoires.');
+                return;
+            }
+            
+            // Initialiser le graphique
+            initializeChart();
+            
+            // Réinitialiser les données
+            dataValues = [];
+            dataTableBody.innerHTML = '';
+            
+            // Configuration MQTT
+            const host = `mqtts://${region}.cloud.thethings.network:8883`;
+            const topicBase = `v3/${applicationId}@ttn/devices/`;
+            const topic = deviceId ? `${topicBase}${deviceId}/up` : `${topicBase}+/up`;
+            
+            // Options de connexion
+            const options = {
+                username: applicationId,
+                password: apiKey,
+                clientId: 'ttn_mqtt_' + Math.random().toString(16).substr(2, 8),
+                clean: true,
+            };
+            
+            // Créer un client MQTT
+            try {
+                client = mqtt.connect(host, options);
+                
+                client.on('connect', () => {
+                    console.log('Connected to TTN');
+                    statusDiv.textContent = 'Status: Connecté à TTN';
+                    statusDiv.className = 'status connected';
+                    
+                    // S'abonner au topic
+                    client.subscribe(topic, (err) => {
+                        if (err) {
+                            console.error('Subscription error:', err);
+                            statusDiv.textContent = `Status: Erreur d'abonnement - ${err.message}`;
+                            statusDiv.className = 'status disconnected';
+                        } else {
+                            console.log(`Subscribed to ${topic}`);
+                            statusDiv.textContent = `Status: Connecté et abonné à ${topic}`;
+                        }
+                    });
+                    
+                    connectBtn.disabled = true;
+                    disconnectBtn.disabled = false;
+                });
+                
+                client.on('message', (topic, message) => {
+                    try {
+                        const payload = JSON.parse(message.toString());
+                        console.log('Message received:', payload);
+                        
+                        // Extraire le Device ID du topic
+                        const deviceId = topic.split('/')[3];
+                        
+                        // Obtenir la valeur spécifiée par l'utilisateur
+                        const value = getNestedValue(payload, dataField);
+                        
+                        if (value !== null && !isNaN(parseFloat(value))) {
+                            const numericValue = parseFloat(value);
+                            
+                            // Ajouter la valeur à notre tableau de données
+                            dataValues.push(numericValue);
+                            if (dataValues.length > maxDataPoints) {
+                                dataValues.shift();
+                            }
+                            
+                            // Mettre à jour l'interface
+                            addDataRow(deviceId, numericValue, payload.received_at || new Date());
+                            updateHistogram();
+                        }
+                    } catch (error) {
+                        console.error('Error processing message:', error);
+                    }
+                });
+                
+                client.on('error', (err) => {
+                    console.error('MQTT error:', err);
+                    statusDiv.textContent = `Status: Erreur - ${err.message}`;
+                    statusDiv.className = 'status disconnected';
+                });
+                
+                client.on('close', () => {
+                    console.log('Connection closed');
+                    statusDiv.textContent = 'Status: Déconnecté';
+                    statusDiv.className = 'status disconnected';
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                });
+                
+            } catch (error) {
+                console.error('Connection error:', error);
+                statusDiv.textContent = `Status: Erreur de connexion - ${error.message}`;
+                statusDiv.className = 'status disconnected';
+            }
+        }
+        
+        // Déconnexion
+        function disconnectFromTTN() {
+            if (client && client.connected) {
+                client.end();
+            }
+        }
+        
+        // Écouteurs d'événements
+        connectBtn.addEventListener('click', connectToTTN);
+        disconnectBtn.addEventListener('click', disconnectFromTTN);
+        
+        // Initialiser l'histogramme vide
+        initializeChart();
+    </script>
+</body>
+</html>
