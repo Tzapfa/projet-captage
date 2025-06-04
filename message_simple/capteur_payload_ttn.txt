@@ -1,0 +1,25 @@
+function decodeUplink(input) {
+  try {
+    const txt = String.fromCharCode(...input.bytes);
+
+    const turbMatch = txt.match(/TURB(\d+)/);
+    const debMatch = txt.match(/DEB(\d+)/);
+
+    const result = {};
+
+    if (turbMatch) {
+      result.turbidite = parseInt(turbMatch[1]) / 100.0 + " V";
+    }
+
+    if (debMatch) {
+      result.debit = parseInt(debMatch[1]) / 100.0 + " L";
+    }
+
+    return { data: result };
+
+  } catch (err) {
+    return {
+      errors: ["Erreur de décodage", err.toString()]
+    };
+  }
+}

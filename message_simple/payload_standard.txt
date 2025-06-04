@@ -1,0 +1,13 @@
+function decodeUplink(input) {
+  let decodedString = String.fromCharCode.apply(null, input.bytes);
+
+  return {
+    data: {
+      decoded: decodedString
+    },
+    warnings: [],
+    errors: []
+  };
+
+
+}
